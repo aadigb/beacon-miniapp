@@ -1,6 +1,6 @@
 // src/app/api/questions/upvote/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { upvoteQuestion } from "@/server/db";
+import { upvoteQuestion } from "../../../../server/db";
 
 export async function POST(req: NextRequest) {
   try {
