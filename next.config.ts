@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
       {
         source: "/.well-known/farcaster.json",
         destination:
-          "https://api.farcaster.xyz/miniapps/hosted-manifest/019b2b12-2f09-ad20-f0f4-c5fef5bc00df",
+          "https://api.farcaster.xyz/miniapps/hosted-manifest/019b2d32-2e72-c998-6439-6bfaba49ca37",
         permanent: false, // 307 redirect
       },
     ];

@@ -21,27 +21,27 @@ export async function POST(req: NextRequest) {
       adminWallet,
       adminFid,
       adminUsername,
-    } = body || {};
+    } = body ?? {};
 
-    if (!tokenAddress || !adminWallet || !chain) {
+    if (!tokenAddress || !adminWallet || typeof adminFid !== "number") {
       return NextResponse.json(
-        { error: "tokenAddress, chain, and adminWallet are required" },
+        { error: "tokenAddress, adminWallet, and adminFid are required" },
         { status: 400 }
       );
     }
 
     const project = createProject({
-      tokenSymbol: tokenSymbol || "$TOKEN",
-      tokenAddress,
-      chain,
-      adminWallet,
-      adminFid: Number(adminFid ?? 0),
-      adminUsername: adminUsername || "anon",
+      tokenSymbol: (tokenSymbol || "$TOKEN").trim(),
+      tokenAddress: tokenAddress.trim(),
+      chain: (chain || "base-mainnet").trim(),
+      adminWallet: adminWallet.toLowerCase(),
+      adminFid,
+      adminUsername: adminUsername || "",
     });
 
-    return NextResponse.json({ project });
-  } catch (err) {
-    console.error("Error in POST /api/projects:", err);
+    return NextResponse.json({ project }, { status: 201 });
+  } catch (e) {
+    console.error("POST /api/projects error", e);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

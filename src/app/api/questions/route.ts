@@ -1,30 +1,23 @@
 // src/app/api/questions/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import {
-  listQuestionsForProject,
+  listQuestionsByProject,
   createQuestion,
-  getProjectById,
 } from "../../../server/db";
 
 export async function GET(req: NextRequest) {
-  const projectId = req.nextUrl.searchParams.get("projectId");
+  const url = new URL(req.url);
+  const projectId = url.searchParams.get("projectId");
+
   if (!projectId) {
     return NextResponse.json(
-      { error: "projectId query param is required" },
+      { error: "projectId is required" },
       { status: 400 }
     );
   }
 
-  const project = getProjectById(projectId);
-  if (!project) {
-    return NextResponse.json(
-      { error: "Project not found" },
-      { status: 404 }
-    );
-  }
-
-  const questions = listQuestionsForProject(projectId);
-  return NextResponse.json({ questions, project });
+  const questions = listQuestionsByProject(projectId);
+  return NextResponse.json({ questions });
 }
 
 export async function POST(req: NextRequest) {
@@ -36,34 +29,26 @@ export async function POST(req: NextRequest) {
       authorFid,
       authorUsername,
       walletAddress,
-    } = body || {};
+    } = body ?? {};
 
-    if (!projectId || !text || !walletAddress) {
+    if (!projectId || !text || !walletAddress || typeof authorFid !== "number") {
       return NextResponse.json(
-        { error: "projectId, text, walletAddress are required" },
+        { error: "projectId, text, walletAddress, authorFid are required" },
         { status: 400 }
-      );
-    }
-
-    const project = getProjectById(projectId);
-    if (!project) {
-      return NextResponse.json(
-        { error: "Project not found" },
-        { status: 404 }
       );
     }
 
     const question = createQuestion({
       projectId,
-      text,
-      authorFid: Number(authorFid ?? 0),
-      authorUsername: authorUsername || "anon",
-      walletAddress,
+      text: String(text).slice(0, 500), // simple guard
+      authorFid,
+      authorUsername: authorUsername || "",
+      walletAddress: walletAddress.toLowerCase(),
     });
 
-    return NextResponse.json({ question });
-  } catch (err) {
-    console.error("Error in POST /api/questions:", err);
+    return NextResponse.json({ question }, { status: 201 });
+  } catch (e) {
+    console.error("POST /api/questions error", e);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

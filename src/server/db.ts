@@ -1,8 +1,6 @@
 // src/server/db.ts
-// Super simple in-memory store for dev.
-// NOTE: This resets when the server restarts / redeploys.
 
-export type Project = {
+export type ProjectRecord = {
   id: string;
   tokenSymbol: string;
   tokenAddress: string;
@@ -13,7 +11,7 @@ export type Project = {
   createdAt: number;
 };
 
-export type Question = {
+export type QuestionRecord = {
   id: string;
   projectId: string;
   text: string;
@@ -21,95 +19,105 @@ export type Question = {
   authorUsername: string;
   walletAddress: string;
   votes: number;
-  voters: string[]; // lowercase wallet addresses
+  voters: string[];
   createdAt: number;
 };
 
-const projects: Project[] = [];
-const questions: Question[] = [];
+type DB = {
+  projects: ProjectRecord[];
+  questions: QuestionRecord[];
+};
 
-const makeId = () => Math.random().toString(36).slice(2);
+// reuse the same DB across hot reloads / lambda invocations
+const globalForDb = globalThis as unknown as { _beaconDb?: DB };
 
-export function listProjectsWithCounts() {
-  return projects.map((p) => ({
-    ...p,
-    totalQuestions: questions.filter((q) => q.projectId === p.id).length,
-  }));
+const db: DB =
+  globalForDb._beaconDb ??
+  {
+    projects: [],
+    questions: [],
+  };
+
+if (!globalForDb._beaconDb) {
+  globalForDb._beaconDb = db;
 }
 
-export function createProject(input: {
-  tokenSymbol: string;
-  tokenAddress: string;
-  chain: string;
-  adminWallet: string;
-  adminFid: number;
-  adminUsername: string;
-}) {
-  const existing = projects.find(
+const makeId = () =>
+  (typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2)) as string;
+
+// -------- Projects --------
+
+export type ProjectSummary = ProjectRecord & {
+  totalQuestions: number;
+};
+
+export function listProjectsWithCounts(): ProjectSummary[] {
+  return db.projects
+    .map((p) => ({
+      ...p,
+      totalQuestions: db.questions.filter((q) => q.projectId === p.id).length,
+    }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function createProject(input: Omit<ProjectRecord, "id" | "createdAt">) {
+  const existing = db.projects.find(
     (p) =>
       p.tokenAddress.toLowerCase() === input.tokenAddress.toLowerCase() &&
       p.chain === input.chain
   );
+
   if (existing) {
+    // idempotent: return the existing project instead of creating a duplicate
     return existing;
   }
 
-  const project: Project = {
+  const project: ProjectRecord = {
     id: makeId(),
-    tokenSymbol: input.tokenSymbol || "$TOKEN",
-    tokenAddress: input.tokenAddress,
-    chain: input.chain,
-    adminWallet: input.adminWallet.toLowerCase(),
-    adminFid: input.adminFid,
-    adminUsername: input.adminUsername,
     createdAt: Date.now(),
+    ...input,
   };
-  projects.push(project);
+
+  db.projects.push(project);
   return project;
 }
 
-export function getProjectById(id: string) {
-  return projects.find((p) => p.id === id) ?? null;
-}
+// -------- Questions --------
 
-export function listQuestionsForProject(projectId: string) {
-  return questions
+export function listQuestionsByProject(projectId: string): QuestionRecord[] {
+  return db.questions
     .filter((q) => q.projectId === projectId)
-    .sort((a, b) => b.votes - a.votes || b.createdAt - a.createdAt);
+    .sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt);
 }
 
-export function createQuestion(input: {
-  projectId: string;
-  text: string;
-  authorFid: number;
-  authorUsername: string;
-  walletAddress: string;
-}) {
-  const question: Question = {
+export function createQuestion(
+  input: Omit<QuestionRecord, "id" | "votes" | "voters" | "createdAt">
+) {
+  const question: QuestionRecord = {
     id: makeId(),
-    projectId: input.projectId,
-    text: input.text,
-    authorFid: input.authorFid,
-    authorUsername: input.authorUsername,
-    walletAddress: input.walletAddress.toLowerCase(),
+    createdAt: Date.now(),
     votes: 0,
     voters: [],
-    createdAt: Date.now(),
+    ...input,
   };
-  questions.push(question);
+  db.questions.push(question);
   return question;
 }
 
 export function upvoteQuestion(questionId: string, walletAddress: string) {
-  const q = questions.find((qq) => qq.id === questionId);
+  const q = db.questions.find((q) => q.id === questionId);
   if (!q) return null;
 
   const addr = walletAddress.toLowerCase();
+
   if (q.voters.includes(addr)) {
-    return q; // already voted
+    // already voted – no-op; you could also choose to unvote here
+    return q;
   }
 
-  q.votes += 1;
   q.voters.push(addr);
+  q.votes += 1;
   return q;
 }
