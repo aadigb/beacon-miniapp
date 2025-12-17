@@ -38,7 +38,7 @@ const ACCENT_DARK = "#4c1d95";
 const ACCENT_LIGHT = "#e9d5ff";
 
 export default function Page() {
-  const { context, isLoading } = useMiniApp();
+  const { context } = useMiniApp();
   const [mounted, setMounted] = useState(false);
   const [sdkReady, setSdkReady] = useState(false);
 
@@ -63,9 +63,10 @@ export default function Page() {
 
   useEffect(() => setMounted(true), []);
 
+  // Tell Farcaster the miniapp is ready once context is available
   useEffect(() => {
     const init = async () => {
-      if (!isLoading && context && !sdkReady) {
+      if (context && !sdkReady) {
         try {
           await sdk.actions.ready();
           setSdkReady(true);
@@ -74,8 +75,8 @@ export default function Page() {
         }
       }
     };
-    init();
-  }, [isLoading, context, sdkReady]);
+    void init();
+  }, [context, sdkReady]);
 
   const wallet = context?.wallets?.[0]?.address?.toLowerCase();
   const user = context?.user;
@@ -430,7 +431,7 @@ export default function Page() {
 
   // ---------- RENDER ----------
 
-  if (!mounted || isLoading || !context) {
+  if (!mounted || !context || !sdkReady) {
     return (
       <div style={outerStyle}>
         <div style={cardStyle}>
@@ -499,9 +500,7 @@ export default function Page() {
               <div style={{ ...statCard, textAlign: "right" }}>
                 <div style={statLabelStyle}>Available tokens</div>
                 <div style={statValueStyle}>
-                  {projectsLoading
-                    ? "Loading…"
-                    : projects.length || "None"}
+                  {projectsLoading ? "Loading…" : projects.length || "None"}
                 </div>
                 <div style={statSubStyle}>
                   These tokens have Beacon Q&amp;A enabled.
@@ -515,20 +514,14 @@ export default function Page() {
                 style={selectStyle}
                 value={selectedProjectId ?? ""}
                 onChange={(e) =>
-                  setSelectedProjectId(
-                    e.target.value || null
-                  )
+                  setSelectedProjectId(e.target.value || null)
                 }
               >
                 {projects.length === 0 && (
-                  <option value="">
-                    No tokens enabled yet
-                  </option>
+                  <option value="">No tokens enabled yet</option>
                 )}
                 {projects.length > 0 && !selectedProjectId && (
-                  <option value="">
-                    Select a token to view questions
-                  </option>
+                  <option value="">Select a token to view questions</option>
                 )}
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -550,9 +543,7 @@ export default function Page() {
                 }
                 disabled={!isHolder || !selectedProjectId}
                 value={questionText}
-                onChange={(e) =>
-                  setQuestionText(e.target.value)
-                }
+                onChange={(e) => setQuestionText(e.target.value)}
               />
               <div style={composerFooter}>
                 <span
@@ -563,8 +554,8 @@ export default function Page() {
                     lineHeight: 1.3,
                   }}
                 >
-                  Questions are scoped per token. Devs can see and
-                  answer the highest-voted ones.
+                  Questions are scoped per token. Devs can see and answer the
+                  highest-voted ones.
                 </span>
                 <button
                   style={{
@@ -596,53 +587,32 @@ export default function Page() {
 
             {/* Questions list */}
             <div style={questionsHeaderStyle}>
-              <span style={{ fontWeight: 600 }}>
-                Top questions
-              </span>
-              <span
-                style={{ fontSize: 11, color: "#8f8cab" }}
-              >
-                {questionsLoading
-                  ? "Loading…"
-                  : `${questions.length} total`}
+              <span style={{ fontWeight: 600 }}>Top questions</span>
+              <span style={{ fontSize: 11, color: "#8f8cab" }}>
+                {questionsLoading ? "Loading…" : `${questions.length} total`}
               </span>
             </div>
 
             <div style={questionsListStyle}>
-              {!questionsLoading &&
-                questions.length === 0 && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#8a87a6",
-                      padding: "8px 0",
-                    }}
-                  >
-                    No questions yet for this token. Be the first
-                    to ask something meaningful.
-                  </div>
-                )}
+              {!questionsLoading && questions.length === 0 && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#8a87a6",
+                    padding: "8px 0",
+                  }}
+                >
+                  No questions yet for this token. Be the first to ask something
+                  meaningful.
+                </div>
+              )}
 
               {questions.map((q) => {
-                const voted = wallet
-                  ? q.voters.includes(wallet)
-                  : false;
+                const voted = wallet ? q.voters.includes(wallet) : false;
                 return (
-                  <div
-                    key={q.id}
-                    style={questionCardStyle}
-                  >
-                    <div
-                      style={{ flex: 1, minWidth: 0 }}
-                    >
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 13,
-                        }}
-                      >
-                        {q.text}
-                      </p>
+                  <div key={q.id} style={questionCardStyle}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ margin: 0, fontSize: 13 }}>{q.text}</p>
                       <p
                         style={{
                           margin: "4px 0 0",
@@ -654,14 +624,8 @@ export default function Page() {
                       </p>
                     </div>
                     <button
-                      style={
-                        voted
-                          ? voteButtonActiveStyle
-                          : voteButtonStyle
-                      }
-                      onClick={() =>
-                        handleUpvote(q.id)
-                      }
+                      style={voted ? voteButtonActiveStyle : voteButtonStyle}
+                      onClick={() => handleUpvote(q.id)}
                       disabled={!wallet || voted}
                     >
                       ▲ {q.votes}
@@ -677,40 +641,27 @@ export default function Page() {
 
             <div style={statRowStyle}>
               <div style={statCard}>
-                <div style={statLabelStyle}>
-                  Your wallet
-                </div>
+                <div style={statLabelStyle}>Your wallet</div>
                 <div style={statValueStyle}>
                   {wallet
-                    ? `${wallet.slice(
-                        0,
-                        6
-                      )}…${wallet.slice(-4)}`
+                    ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}`
                     : "Not connected"}
                 </div>
                 <div style={statSubStyle}>
-                  This wallet will be treated as the token&apos;s
-                  admin for Beacon.
+                  This wallet will be treated as the token&apos;s admin for
+                  Beacon.
                 </div>
               </div>
               <div style={{ ...statCard, textAlign: "right" }}>
-                <div style={statLabelStyle}>
-                  Enabled tokens
-                </div>
-                <div style={statValueStyle}>
-                  {projects.length}
-                </div>
+                <div style={statLabelStyle}>Enabled tokens</div>
+                <div style={statValueStyle}>{projects.length}</div>
                 <div style={statSubStyle}>
-                  You can enable multiple tokens with this
-                  wallet.
+                  You can enable multiple tokens with this wallet.
                 </div>
               </div>
             </div>
 
-            <form
-              onSubmit={handleEnableForToken}
-              style={composerCard}
-            >
+            <form onSubmit={handleEnableForToken} style={composerCard}>
               <div
                 style={{
                   fontSize: 12,
@@ -718,9 +669,8 @@ export default function Page() {
                   color: "#cbc7ff",
                 }}
               >
-                Enable Beacon Q&amp;A on a token you admin.
-                Holders will be able to submit and upvote
-                questions.
+                Enable Beacon Q&amp;A on a token you admin. Holders will be able
+                to submit and upvote questions.
               </div>
 
               <div style={{ marginBottom: 8 }}>
@@ -735,9 +685,7 @@ export default function Page() {
                 </label>
                 <input
                   value={devTokenSymbol}
-                  onChange={(e) =>
-                    setDevTokenSymbol(e.target.value)
-                  }
+                  onChange={(e) => setDevTokenSymbol(e.target.value)}
                   style={{
                     ...textareaStyle,
                     minHeight: 0,
@@ -758,9 +706,7 @@ export default function Page() {
                 </label>
                 <input
                   value={devTokenAddress}
-                  onChange={(e) =>
-                    setDevTokenAddress(e.target.value)
-                  }
+                  onChange={(e) => setDevTokenAddress(e.target.value)}
                   placeholder="0x…"
                   style={{
                     ...textareaStyle,
@@ -782,9 +728,7 @@ export default function Page() {
                 </label>
                 <input
                   value={devChain}
-                  onChange={(e) =>
-                    setDevChain(e.target.value)
-                  }
+                  onChange={(e) => setDevChain(e.target.value)}
                   placeholder="base-mainnet"
                   style={{
                     ...textareaStyle,
@@ -803,20 +747,15 @@ export default function Page() {
                     lineHeight: 1.3,
                   }}
                 >
-                  v0: we just record that this wallet enabled
-                  Beacon for the token. Later we can add on-chain
-                  admin checks and metrics.
+                  v0: we just record that this wallet enabled Beacon for the
+                  token. Later we can add on-chain admin checks and metrics.
                 </span>
                 <button
                   type="submit"
                   style={{
                     ...submitButtonStyle,
-                    opacity:
-                      !wallet || devSaving ? 0.4 : 1,
-                    cursor:
-                      !wallet || devSaving
-                        ? "default"
-                        : "pointer",
+                    opacity: !wallet || devSaving ? 0.4 : 1,
+                    cursor: !wallet || devSaving ? "default" : "pointer",
                   }}
                   disabled={!wallet || devSaving}
                 >
