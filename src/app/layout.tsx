@@ -1,13 +1,11 @@
 // src/app/layout.tsx
-import "./globals.css";
 import type { Metadata } from "next";
-import { MiniAppProvider } from "@neynar/react";
-import { WagmiConfig } from "wagmi";
-import { wagmiConfig } from "../lib/wagmi";
+import "./globals.css";
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Beacon",
-  description: "Token Q&A for Farcaster devs and holders",
+  description: "Beacon – tokenholder Q&A for Farcaster projects",
 };
 
 export default function RootLayout({
@@ -18,9 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <MiniAppProvider analyticsEnabled>
-          <WagmiConfig config={wagmiConfig}>{children}</WagmiConfig>
-        </MiniAppProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
