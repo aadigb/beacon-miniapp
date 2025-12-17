@@ -40,7 +40,6 @@ const ACCENT = "#a855f7";
 const ACCENT_SOFT = "#c4a6ff";
 
 export default function Page() {
-  // Neynar miniapp context (typed loosely to avoid TS mismatch across versions)
   const mini = useMiniApp() as any;
   const context = mini?.context;
   const isLoading = mini?.isLoading;
@@ -49,15 +48,11 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
   const [sdkReady, setSdkReady] = useState(false);
 
-  // holder / dev mode
   const [mode, setMode] = useState<"holder" | "dev">("holder");
 
-  // data
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    null
-  );
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const [questions, setQuestions] = useState<Question[]>([]);
   const [questionsLoading, setQuestionsLoading] = useState(false);
@@ -70,38 +65,38 @@ export default function Page() {
   const [devChain, setDevChain] = useState("base-mainnet");
   const [devSaving, setDevSaving] = useState(false);
 
+  // holder gating
+  const [holderLoading, setHolderLoading] = useState(false);
+  const [isOnchainHolder, setIsOnchainHolder] = useState(false);
+
   useEffect(() => setMounted(true), []);
 
-  // ---- Wagmi wallet (Farcaster miniapp connector) ----
+  // Wagmi (Farcaster connector)
   const { address, isConnected } = useAccount();
   const { connect, connectors, status: connectStatus } = useConnect();
 
   const wallet = address?.toLowerCase().trim();
   const user = context?.user;
-  const isHolder = isConnected && !!wallet; // v0 gate: connected wallet == holder
 
   const handleConnectWallet = useCallback(() => {
     if (isConnected) return;
     const connector = connectors?.[0];
     if (!connector) {
-      alert(
-        "No Farcaster wallet connector found. Make sure your wagmi config includes the Farcaster Mini App connector."
-      );
+      alert("No Farcaster wallet connector found in wagmi config.");
       return;
     }
     connect({ connector });
   }, [connect, connectors, isConnected]);
 
-  // Mark ready for Farcaster host
+  // ready
   useEffect(() => {
     if (!isSDKLoaded || sdkReady || !context) return;
-
     (async () => {
       try {
         await sdk.actions.ready();
         setSdkReady(true);
       } catch (e) {
-        console.error("Error calling sdk.actions.ready()", e);
+        console.error("sdk.actions.ready failed", e);
       }
     })();
   }, [context, isSDKLoaded, sdkReady]);
@@ -112,14 +107,12 @@ export default function Page() {
       : null;
   }, [projects, selectedProjectId]);
 
-  const myProjects = useMemo(() => {
-    if (!wallet) return [];
-    return projects.filter(
-      (p) => p.adminWallet.toLowerCase() === wallet.toLowerCase()
-    );
-  }, [projects, wallet]);
+  const isAdmin = useMemo(() => {
+    if (!wallet || !selectedProject) return false;
+    return selectedProject.adminWallet.toLowerCase() === wallet.toLowerCase();
+  }, [selectedProject, wallet]);
 
-  // ------------ data helpers ------------
+  const canPost = isConnected && !!wallet && (isOnchainHolder || isAdmin);
 
   const refreshProjects = useCallback(async () => {
     setProjectsLoading(true);
@@ -127,9 +120,7 @@ export default function Page() {
       const res = await fetch("/api/projects", { cache: "no-store" });
       if (!res.ok) throw new Error("Failed to fetch projects");
       const data = await res.json();
-      const list: ProjectSummary[] = Array.isArray(data.projects)
-        ? data.projects
-        : [];
+      const list: ProjectSummary[] = Array.isArray(data.projects) ? data.projects : [];
       setProjects(list);
       setSelectedProjectId((cur) => cur ?? (list[0]?.id ?? null));
     } catch (err) {
@@ -142,10 +133,9 @@ export default function Page() {
   const refreshQuestions = useCallback(async (projectId: string) => {
     setQuestionsLoading(true);
     try {
-      const res = await fetch(
-        `/api/questions?projectId=${encodeURIComponent(projectId)}`,
-        { cache: "no-store" }
-      );
+      const res = await fetch(`/api/questions?projectId=${encodeURIComponent(projectId)}`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("Failed to fetch questions");
       const data = await res.json();
       const list: Question[] = Array.isArray(data.questions) ? data.questions : [];
@@ -157,25 +147,45 @@ export default function Page() {
     }
   }, []);
 
-  // initial projects (after mount + sdkReady)
   useEffect(() => {
     if (!mounted || !sdkReady) return;
     void refreshProjects();
   }, [mounted, sdkReady, refreshProjects]);
 
-  // questions when project changes
   useEffect(() => {
     if (!selectedProjectId) return;
     void refreshQuestions(selectedProjectId);
   }, [selectedProjectId, refreshQuestions]);
 
-  // ------------ dev: enable token ------------
+  // Onchain holder check when token+wallet changes
+  useEffect(() => {
+    const run = async () => {
+      setIsOnchainHolder(false);
+      if (!wallet || !selectedProject?.tokenAddress || !isConnected) return;
+
+      setHolderLoading(true);
+      try {
+        const res = await fetch(
+          `/api/holder?tokenAddress=${encodeURIComponent(
+            selectedProject.tokenAddress
+          )}&walletAddress=${encodeURIComponent(wallet)}`,
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        if (res.ok) setIsOnchainHolder(!!data.isHolder);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setHolderLoading(false);
+      }
+    };
+    void run();
+  }, [wallet, selectedProject?.tokenAddress, isConnected]);
 
   const handleEnableForToken = async (e: FormEvent) => {
     e.preventDefault();
-
     if (!wallet || !user || !isConnected) {
-      alert("Connect your Farcaster wallet first.");
+      alert("Connect your wallet first.");
       return;
     }
     if (!devTokenAddress.trim()) {
@@ -201,10 +211,10 @@ export default function Page() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to enable token");
 
-      const project: ProjectSummary | undefined = data.project;
       await refreshProjects();
-      if (project?.id) setSelectedProjectId(project.id);
+      if (data?.project?.id) setSelectedProjectId(data.project.id);
       setMode("holder");
+      setDevTokenAddress("");
     } catch (err: any) {
       console.error(err);
       alert(err?.message || "Failed to enable token");
@@ -213,11 +223,8 @@ export default function Page() {
     }
   };
 
-  // ------------ holder: submit / upvote ------------
-
   const handleSubmitQuestion = async () => {
-    if (!isHolder || !wallet || !user || !selectedProjectId) return;
-
+    if (!canPost || !wallet || !user || !selectedProjectId) return;
     const text = questionText.trim();
     if (!text) return;
 
@@ -242,7 +249,7 @@ export default function Page() {
   };
 
   const handleUpvote = async (id: string) => {
-    if (!wallet || !selectedProjectId) return;
+    if (!canPost || !wallet) return;
     try {
       const res = await fetch("/api/questions/upvote", {
         method: "POST",
@@ -250,14 +257,13 @@ export default function Page() {
         body: JSON.stringify({ questionId: id, walletAddress: wallet }),
       });
       if (!res.ok) throw new Error("Failed to upvote");
-      await refreshQuestions(selectedProjectId);
+      if (selectedProjectId) await refreshQuestions(selectedProjectId);
     } catch (err) {
       console.error(err);
     }
   };
 
-  // ------------ styles (dark / purple, Noice-ish) ------------
-
+  // ---------------- styles ----------------
   const outerStyle: CSSProperties = {
     minHeight: "100vh",
     background:
@@ -279,8 +285,7 @@ export default function Page() {
     border: "1px solid rgba(135,118,217,0.24)",
     background:
       "linear-gradient(145deg, rgba(11,9,27,0.98) 0%, rgba(3,3,12,0.98) 100%)",
-    boxShadow:
-      "0 26px 70px rgba(0,0,0,0.85), 0 0 0 1px rgba(0,0,0,0.9)",
+    boxShadow: "0 26px 70px rgba(0,0,0,0.85)",
     padding: 16,
     boxSizing: "border-box",
   };
@@ -289,8 +294,8 @@ export default function Page() {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
     gap: 10,
+    marginBottom: 10,
   };
 
   const brandStyle: CSSProperties = {
@@ -306,7 +311,7 @@ export default function Page() {
     marginTop: 4,
   };
 
-  const userPill: CSSProperties = {
+  const pill: CSSProperties = {
     display: "flex",
     flexDirection: "column",
     alignItems: "flex-end",
@@ -319,7 +324,7 @@ export default function Page() {
     minWidth: 140,
   };
 
-  const connectButton: CSSProperties = {
+  const btn: CSSProperties = {
     marginTop: 6,
     padding: "7px 12px",
     borderRadius: 999,
@@ -328,156 +333,55 @@ export default function Page() {
     color: "#f4f4ff",
     fontSize: 12,
     cursor: "pointer",
-    whiteSpace: "nowrap",
   };
 
-  const modeTabsRow: CSSProperties = {
-    display: "flex",
-    gap: 8,
-    marginTop: 12,
-    marginBottom: 14,
-    fontSize: 12,
-  };
+  const tabs: CSSProperties = { display: "flex", gap: 8, marginBottom: 12 };
 
-  const modeTabBase: CSSProperties = {
+  const tabBase: CSSProperties = {
     padding: "7px 15px",
     borderRadius: 999,
     border: "1px solid rgba(72,67,121,0.8)",
     background: "rgba(9,8,25,0.9)",
     color: "#908cb0",
     cursor: "pointer",
+    fontSize: 12,
   };
 
-  const modeTabActive: CSSProperties = {
-    ...modeTabBase,
+  const tabActive: CSSProperties = {
+    ...tabBase,
     border: `1px solid ${ACCENT}`,
     background:
-      "linear-gradient(135deg, rgba(168,85,247,0.22) 0%, rgba(88,28,135,0.65) 50%, rgba(4,0,12,0.98) 100%)",
+      "linear-gradient(135deg, rgba(168,85,247,0.22), rgba(88,28,135,0.65))",
     color: "#f7f3ff",
     fontWeight: 600,
   };
 
-  const heroCard: CSSProperties = {
-    borderRadius: 22,
-    padding: 14,
-    marginBottom: 14,
-    background:
-      "linear-gradient(145deg, rgba(60,32,120,0.46) 0%, rgba(23,13,55,0.92) 35%, #080616 90%)",
-    border: "1px solid rgba(178,155,255,0.45)",
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-  };
-
-  const heroTopRow: CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 10,
-  };
-
-  const tokenBadge: CSSProperties = {
-    padding: "4px 9px",
-    borderRadius: 999,
-    border: "1px solid rgba(221,214,254,0.3)",
-    fontSize: 11,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    background: "rgba(15,7,40,0.95)",
-  };
-
-  const miniatureDot: CSSProperties = {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    background: ACCENT,
-    boxShadow: "0 0 0 4px rgba(168,85,247,0.35)",
-  };
-
-  const heroStatRow: CSSProperties = {
-    display: "flex",
-    gap: 12,
-    fontSize: 11,
-    color: "#e5ddff",
-  };
-
-  const heroStatBlock: CSSProperties = {
-    flex: 1,
-    padding: "6px 9px",
-    borderRadius: 16,
-    background: "rgba(8,5,26,0.88)",
-    border: "1px solid rgba(124,113,199,0.38)",
-  };
-
-  const heroLabel: CSSProperties = {
-    textTransform: "uppercase",
-    letterSpacing: "0.18em",
-    color: "#b7b3e3",
-    fontSize: 10,
-    marginBottom: 2,
-  };
-
-  const heroValue: CSSProperties = {
-    fontSize: 14,
-    fontWeight: 600,
-  };
-
-  const heroSub: CSSProperties = {
-    opacity: 0.8,
-    marginTop: 1,
-  };
-
-  const tokenRail: CSSProperties = {
-    display: "flex",
-    flexDirection: "row",
-    overflowX: "auto",
-    gap: 8,
-    paddingBottom: 6,
-    marginBottom: 10,
-  };
-
-  const tokenCardBase: CSSProperties = {
-    minWidth: 140,
+  const card: CSSProperties = {
     borderRadius: 18,
-    border: "1px solid rgba(63,57,114,0.9)",
-    background:
-      "linear-gradient(145deg, rgba(13,11,32,0.96), rgba(5,4,18,0.98))",
-    padding: 10,
-    fontSize: 11,
-    cursor: "pointer",
-    color: "#f8f7ff",
-  };
-
-  const tokenCardActive: CSSProperties = {
-    ...tokenCardBase,
-    border: `1px solid ${ACCENT}`,
-    boxShadow: "0 0 0 1px rgba(168,85,247,0.55), 0 18px 40px rgba(0,0,0,0.7)",
-  };
-
-  const sectionTitleRow: CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-    marginBottom: 6,
-    marginTop: 4,
-    fontSize: 12,
-  };
-
-  const composerCard: CSSProperties = {
-    padding: 10,
-    borderRadius: 18,
+    padding: 12,
     border: "1px solid rgba(63,57,114,0.9)",
     background: "rgba(7,6,20,0.98)",
     marginBottom: 12,
   };
 
-  const textareaStyle: CSSProperties = {
+  const input: CSSProperties = {
+    width: "100%",
+    height: 34,
+    borderRadius: 12,
+    border: "1px solid rgba(69,61,131,0.9)",
+    padding: "0 10px",
+    boxSizing: "border-box",
+    fontSize: 13,
+    background: "#090818",
+    color: "#f5f5ff",
+  };
+
+  const textarea: CSSProperties = {
     width: "100%",
     minHeight: 70,
     borderRadius: 12,
     border: "1px solid rgba(69,61,131,0.9)",
-    padding: 8,
+    padding: 10,
     boxSizing: "border-box",
     fontSize: 13,
     background: "#090818",
@@ -485,109 +389,48 @@ export default function Page() {
     resize: "vertical",
   };
 
-  const composerFooter: CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-    gap: 8,
-  };
-
-  const submitButton: CSSProperties = {
-    padding: "7px 16px",
+  const primary: CSSProperties = {
+    padding: "8px 14px",
     borderRadius: 999,
     border: "none",
-    background: "linear-gradient(135deg, #fdfcff 0%, #e3d3ff 40%, #a855f7 100%)",
+    background:
+      "linear-gradient(135deg, #fdfcff 0%, #e3d3ff 40%, #a855f7 100%)",
     color: "#14092c",
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 700,
     cursor: "pointer",
     whiteSpace: "nowrap",
   };
-
-  const questionsList: CSSProperties = {
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-  };
-
-  const questionCard: CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 10,
-    padding: "10px 12px",
-    borderRadius: 16,
-    border: "1px solid rgba(63,57,114,0.9)",
-    background: "linear-gradient(135deg, rgba(10,9,27,0.98), rgba(3,2,12,0.98))",
-  };
-
-  const voteButton: CSSProperties = {
-    padding: "5px 11px",
-    borderRadius: 999,
-    border: "1px solid rgba(99,91,182,0.9)",
-    background: "#0b0a1b",
-    color: "#f4f4ff",
-    fontSize: 12,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  };
-
-  const voteButtonActive: CSSProperties = {
-    ...voteButton,
-    borderColor: ACCENT,
-    background: "rgba(168,85,247,0.17)",
-    color: ACCENT_SOFT,
-  };
-
-  // ------------ loading gate ------------
 
   if (!mounted || isLoading || !context || !sdkReady) {
     return (
       <div style={outerStyle}>
         <div style={shellStyle}>
-          <div
-            style={{
-              ...heroCard,
-              border: "1px solid rgba(63,57,114,0.9)",
-              background: "linear-gradient(135deg, #130d2c, #070616)",
-            }}
-          >
-            <div style={{ fontSize: 13, opacity: 0.9 }}>
-              Booting <strong>Beacon</strong> mini-app…
-            </div>
-          </div>
+          <div style={card}>Booting Beacon…</div>
         </div>
       </div>
     );
   }
 
-  // ------------ render ------------
-
   return (
     <div style={outerStyle}>
       <div style={shellStyle}>
-        {/* header */}
         <div style={headerRow}>
           <div>
             <div style={brandStyle}>BEACON</div>
             <div style={titleStyle}>Token Q&amp;A</div>
           </div>
 
-          <div style={userPill}>
-            <span style={{ fontWeight: 500 }}>@{user?.username ?? "anon"}</span>
+          <div style={pill}>
+            <span style={{ fontWeight: 600 }}>@{user?.username ?? "anon"}</span>
             <span style={{ opacity: 0.7 }}>FID {user?.fid ?? "—"}</span>
 
             {!isConnected ? (
               <button
-                style={{
-                  ...connectButton,
-                  opacity: connectStatus === "pending" ? 0.6 : 1,
-                  cursor: connectStatus === "pending" ? "default" : "pointer",
-                }}
+                type="button"
+                style={{ ...btn, opacity: connectStatus === "pending" ? 0.6 : 1 }}
                 onClick={handleConnectWallet}
                 disabled={connectStatus === "pending"}
-                type="button"
               >
                 {connectStatus === "pending" ? "Connecting…" : "Connect wallet"}
               </button>
@@ -599,309 +442,232 @@ export default function Page() {
           </div>
         </div>
 
-        {/* mode tabs */}
-        <div style={modeTabsRow}>
+        <div style={tabs}>
           <button
-            style={mode === "holder" ? modeTabActive : modeTabBase}
+            type="button"
+            style={mode === "holder" ? tabActive : tabBase}
             onClick={() => setMode("holder")}
           >
             For tokenholders
           </button>
           <button
-            style={mode === "dev" ? modeTabActive : modeTabBase}
+            type="button"
+            style={mode === "dev" ? tabActive : tabBase}
             onClick={() => setMode("dev")}
           >
             For devs
           </button>
         </div>
 
-        {mode === "holder" ? (
+        {mode === "dev" ? (
+          <form onSubmit={handleEnableForToken} style={card}>
+            <div style={{ marginBottom: 10, color: "#cbc7ff", fontSize: 12 }}>
+              Enable Q&amp;A for a token (Base).
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 4 }}>
+                Token symbol
+              </div>
+              <input style={input} value={devTokenSymbol} onChange={(e) => setDevTokenSymbol(e.target.value)} />
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 4 }}>
+                Token contract
+              </div>
+              <input
+                style={input}
+                value={devTokenAddress}
+                onChange={(e) => setDevTokenAddress(e.target.value)}
+                placeholder="0x…"
+              />
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 4 }}>
+                Chain
+              </div>
+              <input style={input} value={devChain} onChange={(e) => setDevChain(e.target.value)} />
+            </div>
+
+            <button
+              type="submit"
+              style={{ ...primary, opacity: !wallet || devSaving ? 0.5 : 1 }}
+              disabled={!wallet || devSaving}
+            >
+              {devSaving ? "Enabling…" : "Enable Q&A"}
+            </button>
+
+            <div style={{ marginTop: 10, fontSize: 11, opacity: 0.75 }}>
+              Enabled tokens persist via KV (so they won’t disappear after deploy).
+            </div>
+          </form>
+        ) : (
           <>
-            {/* hero for selected token */}
-            <div style={heroCard}>
-              <div style={heroTopRow}>
-                <div>
-                  <div style={tokenBadge}>
-                    <div style={miniatureDot} />
-                    <span>
-                      {selectedProject ? selectedProject.tokenSymbol : "No token selected"}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, marginTop: 6, color: "#e5defe" }}>
-                    Ask questions and upvote what you want teams to answer next.
-                  </div>
-                </div>
-
-                <div style={{ textAlign: "right", fontSize: 11 }}>
-                  <div style={{ color: ACCENT_SOFT, fontWeight: 600 }}>
-                    {isHolder ? "Holder ✓" : "View-only"}
-                  </div>
-                  <div style={{ opacity: 0.8 }}>
-                    Wallet{" "}
-                    {wallet ? `${wallet.slice(0, 4)}…${wallet.slice(-4)}` : "not connected"}
-                  </div>
-                </div>
+            <div style={card}>
+              <div style={{ fontSize: 12, opacity: 0.9 }}>
+                Token:{" "}
+                <span style={{ color: ACCENT_SOFT, fontWeight: 700 }}>
+                  {selectedProject ? selectedProject.tokenSymbol : "None"}
+                </span>
               </div>
 
-              <div style={heroStatRow}>
-                <div style={heroStatBlock}>
-                  <div style={heroLabel}>Holder status</div>
-                  <div style={heroValue}>
-                    {isHolder ? "Can submit & upvote" : "View-only"}
-                  </div>
-                  <div style={heroSub}>
-                    Use the “Connect wallet” button to enable posting/upvoting.
-                  </div>
-                </div>
-
-                <div style={heroStatBlock}>
-                  <div style={heroLabel}>Available tokens</div>
-                  <div style={heroValue}>
-                    {projectsLoading ? "Loading…" : projects.length || "None"}
-                  </div>
-                  <div style={heroSub}>Tokens with Beacon enabled.</div>
-                </div>
+              <div style={{ marginTop: 8, fontSize: 12 }}>
+                Status:{" "}
+                <span style={{ color: ACCENT_SOFT, fontWeight: 700 }}>
+                  {holderLoading
+                    ? "Checking…"
+                    : canPost
+                    ? "Holder ✓"
+                    : isConnected
+                    ? "Not a holder"
+                    : "Connect wallet"}
+                </span>
               </div>
             </div>
 
-            {/* token rail */}
-            <div style={sectionTitleRow}>
-              <span style={{ fontWeight: 600 }}>Tokens</span>
-              <span style={{ fontSize: 11, color: "#908cb5" }}>
-                Tap a token to view its Q&amp;A
-              </span>
-            </div>
+            <div style={card}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>
+                Ask a question
+              </div>
 
-            <div style={tokenRail}>
-              {projects.length === 0 && !projectsLoading && (
-                <div style={{ fontSize: 11, color: "#8c87b1", padding: "4px 2px" }}>
-                  No tokens yet. Devs can enable Beacon in the “For devs” tab.
-                </div>
-              )}
-
-              {projects.map((p) => {
-                const active = p.id === selectedProjectId;
-                return (
-                  <button
-                    key={p.id}
-                    style={active ? tokenCardActive : tokenCardBase}
-                    onClick={() => setSelectedProjectId(p.id)}
-                    type="button"
-                  >
-                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>
-                      {p.tokenSymbol}
-                    </div>
-                    <div style={{ fontSize: 10, opacity: 0.8 }}>
-                      {p.tokenAddress.slice(0, 6)}…{p.tokenAddress.slice(-4)}
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 11, color: "#b7b3e7" }}>
-                      {p.totalQuestions} questions
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* composer */}
-            <div style={sectionTitleRow}>
-              <span style={{ fontWeight: 600 }}>Ask a question</span>
-              <span style={{ fontSize: 11, color: "#908cb5" }}>
-                Devs see the highest-voted questions first
-              </span>
-            </div>
-
-            <div style={composerCard}>
               <textarea
-                style={textareaStyle}
-                placeholder={
-                  isHolder
-                    ? "Ask about roadmap, token design, launches, or anything you want clarity on…"
-                    : "Connect your wallet to ask a question."
-                }
-                disabled={!isHolder || !selectedProjectId}
+                style={textarea}
                 value={questionText}
                 onChange={(e) => setQuestionText(e.target.value)}
+                disabled={!canPost || !selectedProjectId}
+                placeholder={
+                  canPost
+                    ? "Ask something specific…"
+                    : "Connect wallet + hold the token to post."
+                }
               />
 
-              <div style={composerFooter}>
-                <span style={{ fontSize: 11, color: "#8a87a6", flex: 1, lineHeight: 1.3 }}>
-                  Questions are per-token. Avoid spam so devs actually answer.
-                </span>
-
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
                 <button
+                  type="button"
                   style={{
-                    ...submitButton,
-                    opacity: !isHolder || !selectedProjectId || !questionText.trim() ? 0.35 : 1,
+                    ...primary,
+                    opacity: !canPost || !selectedProjectId || !questionText.trim() ? 0.4 : 1,
                     cursor:
-                      !isHolder || !selectedProjectId || !questionText.trim()
+                      !canPost || !selectedProjectId || !questionText.trim()
                         ? "default"
                         : "pointer",
                   }}
-                  disabled={!isHolder || !selectedProjectId || !questionText.trim()}
+                  disabled={!canPost || !selectedProjectId || !questionText.trim()}
                   onClick={handleSubmitQuestion}
-                  type="button"
                 >
-                  Submit question
+                  Submit
                 </button>
               </div>
             </div>
 
-            {/* questions */}
-            <div style={sectionTitleRow}>
-              <span style={{ fontWeight: 600 }}>Top questions</span>
-              <span style={{ fontSize: 11, color: "#908cb5" }}>
-                {questionsLoading ? "Loading…" : `${questions.length} total`}
-              </span>
-            </div>
-
-            <div style={questionsList}>
-              {!questionsLoading && questions.length === 0 && (
-                <div style={{ fontSize: 12, color: "#8a87a6", padding: "8px 0" }}>
-                  No questions yet for this token. Be the first to ask something useful.
+            <div style={card}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>Top questions</div>
+                <div style={{ fontSize: 11, opacity: 0.75 }}>
+                  {questionsLoading ? "Loading…" : `${questions.length}`}
                 </div>
-              )}
+              </div>
 
-              {questions.map((q) => {
-                const voted = wallet ? q.voters.includes(wallet) : false;
-                return (
-                  <div key={q.id} style={questionCard}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ margin: 0, fontSize: 13 }}>{q.text}</p>
-                      <p style={{ margin: "4px 0 0", fontSize: 11, color: "#918db9" }}>
-                        @{q.authorUsername || "anon"}
-                      </p>
-                    </div>
-
-                    <button
-                      style={voted ? voteButtonActive : voteButton}
-                      onClick={() => handleUpvote(q.id)}
-                      disabled={!wallet || voted}
-                      type="button"
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                {questions.map((q) => {
+                  const voted = wallet ? q.voters.includes(wallet) : false;
+                  return (
+                    <div
+                      key={q.id}
+                      style={{
+                        borderRadius: 14,
+                        border: "1px solid rgba(63,57,114,0.9)",
+                        padding: 10,
+                        background:
+                          "linear-gradient(135deg, rgba(10,9,27,0.98), rgba(3,2,12,0.98))",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 10,
+                      }}
                     >
-                      ▲ {q.votes}
-                    </button>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13 }}>{q.text}</div>
+                        <div style={{ fontSize: 11, opacity: 0.75, marginTop: 4 }}>
+                          @{q.authorUsername || "anon"}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={!canPost || voted}
+                        onClick={() => handleUpvote(q.id)}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          border: voted ? `1px solid ${ACCENT}` : "1px solid rgba(99,91,182,0.9)",
+                          background: voted ? "rgba(168,85,247,0.17)" : "#0b0a1b",
+                          color: voted ? ACCENT_SOFT : "#f4f4ff",
+                          fontSize: 12,
+                          cursor: !canPost || voted ? "default" : "pointer",
+                          opacity: !canPost ? 0.5 : 1,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        ▲ {q.votes}
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {!questionsLoading && questions.length === 0 && (
+                  <div style={{ fontSize: 12, opacity: 0.75, paddingTop: 6 }}>
+                    No questions yet.
                   </div>
-                );
-              })}
+                )}
+              </div>
             </div>
           </>
-        ) : (
-          <>
-            {/* DEV VIEW */}
-            <div style={heroCard}>
-              <div style={heroTopRow}>
-                <div>
-                  <div style={heroLabel}>You are deploying as</div>
-                  <div style={heroValue}>
-                    {wallet ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}` : "No wallet connected"}
-                  </div>
-                  <div style={heroSub}>This wallet will be recorded as the token admin for Beacon.</div>
-                </div>
+        )}
 
-                <div style={{ textAlign: "right", fontSize: 11 }}>
-                  <div style={heroLabel}>Enabled tokens</div>
-                  <div style={heroValue}>{myProjects.length}</div>
-                  <div style={heroSub}>Use the same admin wallet when enabling new tokens.</div>
-                </div>
-              </div>
+        {/* token picker */}
+        <div style={card}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>
+            Tokens
+          </div>
+          {projectsLoading ? (
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Loading…</div>
+          ) : projects.length === 0 ? (
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              None yet. Enable one in “For devs”.
             </div>
-
-            <form onSubmit={handleEnableForToken} style={composerCard}>
-              <div style={{ fontSize: 12, marginBottom: 8, color: "#cbc7ff" }}>
-                Turn your token into a Q&amp;A funnel. Holders can submit &amp; upvote.
-              </div>
-
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
-                  Token symbol
-                </label>
-                <input
-                  value={devTokenSymbol}
-                  onChange={(e) => setDevTokenSymbol(e.target.value)}
-                  style={{ ...textareaStyle, minHeight: 0, height: 32 }}
-                />
-              </div>
-
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
-                  Token contract address
-                </label>
-                <input
-                  value={devTokenAddress}
-                  onChange={(e) => setDevTokenAddress(e.target.value)}
-                  placeholder="0x…"
-                  style={{ ...textareaStyle, minHeight: 0, height: 32 }}
-                />
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
-                  Chain (label only for now)
-                </label>
-                <input
-                  value={devChain}
-                  onChange={(e) => setDevChain(e.target.value)}
-                  placeholder="base-mainnet"
-                  style={{ ...textareaStyle, minHeight: 0, height: 32 }}
-                />
-              </div>
-
-              <div style={composerFooter}>
-                <span style={{ fontSize: 11, color: "#8a87a6", flex: 1, lineHeight: 1.3 }}>
-                  v0: we record this wallet as admin. Next: add onchain admin checks + token balance gating.
-                </span>
-
-                <button
-                  type="submit"
-                  style={{
-                    ...submitButton,
-                    opacity: !wallet || devSaving ? 0.4 : 1,
-                    cursor: !wallet || devSaving ? "default" : "pointer",
-                  }}
-                  disabled={!wallet || devSaving}
-                >
-                  {devSaving ? "Saving…" : "Enable Q&A"}
-                </button>
-              </div>
-            </form>
-
-            {/* list tokens you admin */}
-            <div style={sectionTitleRow}>
-              <span style={{ fontWeight: 600 }}>Your enabled tokens</span>
-              <span style={{ fontSize: 11, color: "#908cb5" }}>
-                Tap one to jump to holder view
-              </span>
-            </div>
-
-            <div style={tokenRail}>
-              {myProjects.length === 0 && (
-                <div style={{ fontSize: 11, color: "#8c87b1", padding: "4px 2px" }}>
-                  No tokens yet. Enable your first one above.
-                </div>
-              )}
-
-              {myProjects.map((p) => (
+          ) : (
+            <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+              {projects.map((p) => (
                 <button
                   key={p.id}
-                  style={p.id === selectedProjectId ? tokenCardActive : tokenCardBase}
-                  onClick={() => {
-                    setSelectedProjectId(p.id);
-                    setMode("holder");
-                  }}
                   type="button"
+                  onClick={() => setSelectedProjectId(p.id)}
+                  style={{
+                    minWidth: 140,
+                    borderRadius: 16,
+                    border:
+                      p.id === selectedProjectId
+                        ? `1px solid ${ACCENT}`
+                        : "1px solid rgba(63,57,114,0.9)",
+                    background: "rgba(9,8,25,0.9)",
+                    color: "#f8f7ff",
+                    padding: 10,
+                    textAlign: "left",
+                    cursor: "pointer",
+                  }}
                 >
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{p.tokenSymbol}</div>
-                  <div style={{ fontSize: 10, marginTop: 2, opacity: 0.85 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12 }}>{p.tokenSymbol}</div>
+                  <div style={{ fontSize: 10, opacity: 0.8, marginTop: 4 }}>
                     {p.tokenAddress.slice(0, 6)}…{p.tokenAddress.slice(-4)}
-                  </div>
-                  <div style={{ marginTop: 6, fontSize: 11, color: "#b7b3e7" }}>
-                    {p.totalQuestions} questions
                   </div>
                 </button>
               ))}
             </div>
-          </>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1,8 +1,7 @@
 // src/server/db.ts
+import { kv } from "@vercel/kv";
 
-// ---- Types ----
-
-export type ProjectRecord = {
+export type Project = {
   id: string;
   tokenSymbol: string;
   tokenAddress: string;
@@ -13,7 +12,7 @@ export type ProjectRecord = {
   createdAt: number;
 };
 
-export type QuestionRecord = {
+export type Question = {
   id: string;
   projectId: string;
   text: string;
@@ -25,119 +24,69 @@ export type QuestionRecord = {
   createdAt: number;
 };
 
-// ---- In-memory storage (per server process) ----
+const keyProjects = () => `beacon:projects`; // array of Project
+const keyQuestions = (projectId: string) => `beacon:questions:${projectId}`; // array of Question
 
-const projects = new Map<string, ProjectRecord>();
-const questions = new Map<string, QuestionRecord>();
+const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-// Simple ID helper (not crypto-secure, fine for demo)
-function makeId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(
-    36,
-  )}`;
-}
-
-// ---- Project helpers ----
-
-export async function listProjectsWithCounts(): Promise<
-  Array<ProjectRecord & { totalQuestions: number }>
-> {
-  const out: Array<ProjectRecord & { totalQuestions: number }> = [];
-  for (const proj of projects.values()) {
-    const totalQuestions = Array.from(questions.values()).filter(
-      (q) => q.projectId === proj.id,
-    ).length;
-    out.push({ ...proj, totalQuestions });
-  }
-
-  // sort newest first
-  out.sort((a, b) => b.createdAt - a.createdAt);
-  return out;
-}
-
-export async function createProject(input: {
-  tokenSymbol: string;
-  tokenAddress: string;
-  chain: string;
-  adminWallet: string;
-  adminFid: number;
-  adminUsername: string;
-}): Promise<ProjectRecord & { totalQuestions: number }> {
-  const id = makeId("proj");
-  const project: ProjectRecord = {
-    id,
-    tokenSymbol: input.tokenSymbol,
-    tokenAddress: input.tokenAddress,
-    chain: input.chain,
-    adminWallet: input.adminWallet.toLowerCase(),
-    adminFid: input.adminFid,
-    adminUsername: input.adminUsername,
-    createdAt: Date.now(),
-  };
-  projects.set(id, project);
-  return { ...project, totalQuestions: 0 };
-}
-
-// ---- Question helpers ----
-
-export async function listQuestionsByProject(
-  projectId: string,
-): Promise<QuestionRecord[]> {
-  const list = Array.from(questions.values()).filter(
-    (q) => q.projectId === projectId,
+export async function listProjects() {
+  const projects = (await kv.get<Project[]>(keyProjects())) ?? [];
+  // attach totalQuestions cheaply
+  const withCounts = await Promise.all(
+    projects.map(async (p) => {
+      const qs = (await kv.get<Question[]>(keyQuestions(p.id))) ?? [];
+      return { ...p, totalQuestions: qs.length };
+    })
   );
-
-  // highest votes first, then newest first
-  list.sort((a, b) => {
-    if (b.votes !== a.votes) return b.votes - a.votes;
-    return b.createdAt - a.createdAt;
-  });
-
-  return list;
+  // newest first
+  withCounts.sort((a, b) => b.createdAt - a.createdAt);
+  return withCounts;
 }
 
-export async function createQuestion(input: {
-  projectId: string;
-  text: string;
-  authorFid: number;
-  authorUsername: string;
-  walletAddress: string;
-}): Promise<QuestionRecord> {
-  const id = makeId("q");
-  const q: QuestionRecord = {
-    id,
-    projectId: input.projectId,
-    text: input.text,
-    authorFid: input.authorFid,
-    authorUsername: input.authorUsername,
-    walletAddress: input.walletAddress.toLowerCase(),
+export async function createProject(input: Omit<Project, "id" | "createdAt">) {
+  const projects = (await kv.get<Project[]>(keyProjects())) ?? [];
+  const project: Project = { ...input, id: uid(), createdAt: Date.now() };
+  projects.unshift(project);
+  await kv.set(keyProjects(), projects);
+  return project;
+}
+
+export async function listQuestionsByProject(projectId: string) {
+  const qs = (await kv.get<Question[]>(keyQuestions(projectId))) ?? [];
+  // highest voted first, then newest
+  qs.sort((a, b) => (b.votes - a.votes) || (b.createdAt - a.createdAt));
+  return qs;
+}
+
+export async function createQuestion(input: Omit<Question, "id" | "votes" | "voters" | "createdAt">) {
+  const qs = (await kv.get<Question[]>(keyQuestions(input.projectId))) ?? [];
+  const q: Question = {
+    ...input,
+    id: uid(),
     votes: 0,
     voters: [],
     createdAt: Date.now(),
   };
-  questions.set(id, q);
+  qs.unshift(q);
+  await kv.set(keyQuestions(input.projectId), qs);
   return q;
 }
 
-export async function upvoteQuestion(params: {
-  questionId: string;
-  walletAddress: string;
-}): Promise<QuestionRecord | null> {
-  const key = params.walletAddress.toLowerCase();
-  const existing = questions.get(params.questionId);
-  if (!existing) return null;
+export async function upvoteQuestion(questionId: string, walletAddress: string) {
+  // We don’t know projectId from questionId, so we scan projects (small N in v0).
+  const projects = (await kv.get<Project[]>(keyProjects())) ?? [];
+  for (const p of projects) {
+    const qs = (await kv.get<Question[]>(keyQuestions(p.id))) ?? [];
+    const idx = qs.findIndex((q) => q.id === questionId);
+    if (idx === -1) continue;
 
-  // prevent double-voting by same wallet
-  if (existing.voters.includes(key)) {
-    return existing;
+    const w = walletAddress.toLowerCase();
+    if (qs[idx].voters.includes(w)) return qs[idx];
+
+    qs[idx].voters.push(w);
+    qs[idx].votes += 1;
+    await kv.set(keyQuestions(p.id), qs);
+    return qs[idx];
   }
-
-  const updated: QuestionRecord = {
-    ...existing,
-    votes: existing.votes + 1,
-    voters: [...existing.voters, key],
-  };
-
-  questions.set(updated.id, updated);
-  return updated;
+  return null;
 }
