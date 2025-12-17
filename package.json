@@ -47,7 +47,7 @@
     "@farcaster/mini-app-solana": ">=0.0.17 <1.0.0",
     "@farcaster/miniapp-node": ">=0.1.5 <1.0.0",
     "@farcaster/miniapp-sdk": "^0.2.1",
-    "@farcaster/miniapp-wagmi-connector": "^1.0.0",
+    "@farcaster/miniapp-wagmi-connector": "^1.1.0",
     "@farcaster/quick-auth": ">=0.0.7 <1.0.0",
     "@neynar/nodejs-sdk": "^2.19.0",
     "@neynar/react": "^1.2.15",

@@ -1,10 +1,11 @@
 "use client";
 
+import { useAccount, useConnect } from "wagmi";
 import {
   useEffect,
   useState,
   type CSSProperties,
-  FormEvent,
+  type FormEvent,
 } from "react";
 import { useMiniApp } from "@neynar/react";
 import sdk from "@farcaster/miniapp-sdk";
@@ -38,7 +39,7 @@ const ACCENT_SOFT = "#c4a6ff";
 const ACCENT_DARK = "#201033";
 
 export default function Page() {
-  // Neynar miniapp context
+  // Neynar miniapp context (cast to any to avoid TS complaining about isLoading)
   const mini = useMiniApp() as any;
   const context = mini?.context;
   const isLoading = mini?.isLoading;
@@ -61,11 +62,9 @@ export default function Page() {
   const [questionText, setQuestionText] = useState("");
 
   // dev form
-  const [devTokenSymbol, setDevTokenSymbol] =
-    useState("$TEST");
+  const [devTokenSymbol, setDevTokenSymbol] = useState("$TEST");
   const [devTokenAddress, setDevTokenAddress] = useState("");
-  const [devChain, setDevChain] =
-    useState("base-mainnet");
+  const [devChain, setDevChain] = useState("base-mainnet");
   const [devSaving, setDevSaving] = useState(false);
 
   useEffect(() => setMounted(true), []);
@@ -73,7 +72,7 @@ export default function Page() {
   // mark ready for Farcaster host
   useEffect(() => {
     const init = async () => {
-      if (!isLoading && context && !sdkReady) {
+      if (!sdkReady && context) {
         try {
           await sdk.actions.ready();
           setSdkReady(true);
@@ -82,20 +81,34 @@ export default function Page() {
         }
       }
     };
-    void init();
-  }, [isLoading, context, sdkReady]);
+    init();
+  }, [context, sdkReady]);
 
-  // grab wallet + user from context (defensive)
-  const rawWallet =
-    context?.wallets?.[0]?.address ??
-    context?.wallet?.address ??
-    null;
-  const wallet = rawWallet
-    ? String(rawWallet).toLowerCase()
-    : null;
+  // ---- Farcaster wallet via wagmi ----
+  const { address, isConnected } = useAccount();
+  const {
+    connect,
+    connectors,
+    status: connectStatus,
+  } = useConnect();
+
+  const farcasterConnector = connectors[0]; // single Farcaster connector
+
+  const handleConnectWallet = async () => {
+    if (!farcasterConnector || isConnected) return;
+    try {
+      await connect({ connector: farcasterConnector });
+    } catch (e) {
+      console.error("Failed to connect wallet", e);
+      alert(
+        "Could not connect wallet. Make sure you are opening Beacon inside Farcaster."
+      );
+    }
+  };
+
+  const wallet = address?.toLowerCase();
   const user = context?.user;
-  // v0: any connected wallet counts as holder
-  const isHolder = !!wallet;
+  const isHolder = !!wallet; // v0: any connected wallet is treated as holder
 
   const selectedProject = selectedProjectId
     ? projects.find((p) => p.id === selectedProjectId) ?? null
@@ -434,7 +447,7 @@ export default function Page() {
 
   const sectionTitleRow: CSSProperties = {
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent: "spaceBetween" as any,
     alignItems: "baseline",
     marginBottom: 6,
     marginTop: 4,
@@ -572,20 +585,14 @@ export default function Page() {
         <div style={modeTabsRow}>
           <button
             style={
-              mode === "holder"
-                ? modeTabActive
-                : modeTabBase
+              mode === "holder" ? modeTabActive : modeTabBase
             }
             onClick={() => setMode("holder")}
           >
             For tokenholders
           </button>
           <button
-            style={
-              mode === "dev"
-                ? modeTabActive
-                : modeTabBase
-            }
+            style={mode === "dev" ? modeTabActive : modeTabBase}
             onClick={() => setMode("dev")}
           >
             For devs
@@ -634,34 +641,60 @@ export default function Page() {
                   <div style={{ opacity: 0.8 }}>
                     Wallet{" "}
                     {wallet
-                      ? `${wallet.slice(
-                          0,
-                          4
-                        )}…${wallet.slice(-4)}`
+                      ? `${wallet.slice(0, 4)}…${wallet.slice(
+                          -4
+                        )}`
                       : "not connected"}
                   </div>
                 </div>
               </div>
 
               <div style={heroStatRow}>
+                {/* Holder status + connect */}
                 <div style={heroStatBlock}>
-                  <div style={heroLabel}>
-                    Holder status
-                  </div>
+                  <div style={heroLabel}>Holder status</div>
                   <div style={heroValue}>
                     {isHolder
                       ? "Can submit & upvote"
                       : "View-only"}
                   </div>
                   <div style={heroSub}>
-                    Connect a wallet in Farcaster to ask
-                    questions.
+                    {isHolder
+                      ? `Wallet ${wallet?.slice(
+                          0,
+                          6
+                        )}…${wallet?.slice(-4)}`
+                      : "Connect your Farcaster wallet to ask and upvote questions."}
                   </div>
+                  {!isHolder && (
+                    <button
+                      onClick={handleConnectWallet}
+                      style={{
+                        marginTop: 8,
+                        padding: "6px 12px",
+                        borderRadius: 999,
+                        border:
+                          "1px solid rgba(129, 140, 248, 0.9)",
+                        background:
+                          connectStatus === "pending"
+                            ? "rgba(88,28,135,0.45)"
+                            : "rgba(37, 99, 235, 0.9)",
+                        color: "#ede9fe",
+                        fontSize: 11,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {connectStatus === "pending"
+                        ? "Connecting…"
+                        : "Connect wallet"}
+                    </button>
+                  )}
                 </div>
+
+                {/* Available tokens */}
                 <div style={heroStatBlock}>
-                  <div style={heroLabel}>
-                    Available tokens
-                  </div>
+                  <div style={heroLabel}>Available tokens</div>
                   <div style={heroValue}>
                     {projectsLoading
                       ? "Loading…"
@@ -676,9 +709,7 @@ export default function Page() {
 
             {/* token rail */}
             <div style={sectionTitleRow}>
-              <span style={{ fontWeight: 600 }}>
-                Tokens
-              </span>
+              <span style={{ fontWeight: 600 }}>Tokens</span>
               <span
                 style={{
                   fontSize: 11,
@@ -707,9 +738,7 @@ export default function Page() {
                   <button
                     key={p.id}
                     style={
-                      active
-                        ? tokenCardActive
-                        : tokenCardBase
+                      active ? tokenCardActive : tokenCardBase
                     }
                     onClick={() =>
                       setSelectedProjectId(p.id)
@@ -854,13 +883,8 @@ export default function Page() {
                   ? q.voters.includes(wallet)
                   : false;
                 return (
-                  <div
-                    key={q.id}
-                    style={questionCard}
-                  >
-                    <div
-                      style={{ flex: 1, minWidth: 0 }}
-                    >
+                  <div key={q.id} style={questionCard}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <p
                         style={{
                           margin: 0,
@@ -881,13 +905,9 @@ export default function Page() {
                     </div>
                     <button
                       style={
-                        voted
-                          ? voteButtonActive
-                          : voteButton
+                        voted ? voteButtonActive : voteButton
                       }
-                      onClick={() =>
-                        handleUpvote(q.id)
-                      }
+                      onClick={() => handleUpvote(q.id)}
                       disabled={!wallet || voted}
                     >
                       ▲ {q.votes}
@@ -903,21 +923,37 @@ export default function Page() {
             <div style={heroCard}>
               <div style={heroTopRow}>
                 <div>
-                  <div style={heroLabel}>
-                    You are deploying as
-                  </div>
+                  <div style={heroLabel}>You are deploying as</div>
                   <div style={heroValue}>
                     {wallet
-                      ? `${wallet.slice(
-                          0,
-                          6
-                        )}…${wallet.slice(-4)}`
+                      ? `${wallet.slice(0, 6)}…${wallet.slice(
+                          -4
+                        )}`
                       : "No wallet connected"}
                   </div>
                   <div style={heroSub}>
                     This wallet will be recorded as the token
                     admin for Beacon.
                   </div>
+                  {!wallet && (
+                    <button
+                      onClick={handleConnectWallet}
+                      style={{
+                        marginTop: 8,
+                        padding: "6px 12px",
+                        borderRadius: 999,
+                        border:
+                          "1px solid rgba(129, 140, 248, 0.9)",
+                        background: "rgba(37, 99, 235, 0.9)",
+                        color: "#ede9fe",
+                        fontSize: 11,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Connect wallet
+                    </button>
+                  )}
                 </div>
                 <div
                   style={{
@@ -925,12 +961,8 @@ export default function Page() {
                     fontSize: 11,
                   }}
                 >
-                  <div style={heroLabel}>
-                    Enabled tokens
-                  </div>
-                  <div style={heroValue}>
-                    {myProjects.length}
-                  </div>
+                  <div style={heroLabel}>Enabled tokens</div>
+                  <div style={heroValue}>{myProjects.length}</div>
                   <div style={heroSub}>
                     Only you (or your team) should use this
                     wallet when enabling new tokens.
@@ -950,9 +982,9 @@ export default function Page() {
                   color: "#cbc7ff",
                 }}
               >
-                Turn your token into a Q&amp;A funnel.
-                Holders can submit and upvote questions;
-                you always see the highest-signal ones first.
+                Turn your token into a Q&amp;A funnel. Holders
+                can submit and upvote questions; you always see
+                the highest-signal ones first.
               </div>
 
               <div style={{ marginBottom: 8 }}>
@@ -1043,8 +1075,7 @@ export default function Page() {
                   type="submit"
                   style={{
                     ...submitButton,
-                    opacity:
-                      !wallet || devSaving ? 0.4 : 1,
+                    opacity: !wallet || devSaving ? 0.4 : 1,
                     cursor:
                       !wallet || devSaving
                         ? "default"
@@ -1052,9 +1083,7 @@ export default function Page() {
                   }}
                   disabled={!wallet || devSaving}
                 >
-                  {devSaving
-                    ? "Saving…"
-                    : "Enable Q&A"}
+                  {devSaving ? "Saving…" : "Enable Q&A"}
                 </button>
               </div>
             </form>
