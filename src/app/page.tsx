@@ -1,11 +1,10 @@
 "use client";
 
-import { useAccount, useConnect } from "wagmi";
 import {
   useEffect,
   useState,
   type CSSProperties,
-  type FormEvent,
+  FormEvent,
 } from "react";
 import { useMiniApp } from "@neynar/react";
 import sdk from "@farcaster/miniapp-sdk";
@@ -36,10 +35,9 @@ type Question = {
 
 const ACCENT = "#a855f7";
 const ACCENT_SOFT = "#c4a6ff";
-const ACCENT_DARK = "#201033";
 
 export default function Page() {
-  // Neynar miniapp context (cast to any to avoid TS complaining about isLoading)
+  // Neynar miniapp context
   const mini = useMiniApp() as any;
   const context = mini?.context;
   const isLoading = mini?.isLoading;
@@ -69,7 +67,7 @@ export default function Page() {
 
   useEffect(() => setMounted(true), []);
 
-  // mark ready for Farcaster host
+  // Mark ready for Farcaster host
   useEffect(() => {
     const init = async () => {
       if (!sdkReady && context) {
@@ -81,34 +79,15 @@ export default function Page() {
         }
       }
     };
-    init();
+    void init();
   }, [context, sdkReady]);
 
-  // ---- Farcaster wallet via wagmi ----
-  const { address, isConnected } = useAccount();
-  const {
-    connect,
-    connectors,
-    status: connectStatus,
-  } = useConnect();
-
-  const farcasterConnector = connectors[0]; // single Farcaster connector
-
-  const handleConnectWallet = async () => {
-    if (!farcasterConnector || isConnected) return;
-    try {
-      await connect({ connector: farcasterConnector });
-    } catch (e) {
-      console.error("Failed to connect wallet", e);
-      alert(
-        "Could not connect wallet. Make sure you are opening Beacon inside Farcaster."
-      );
-    }
-  };
-
-  const wallet = address?.toLowerCase();
+  // Wallet + user from Farcaster context
+  const wallet = context?.wallets?.[0]?.address
+    ?.toLowerCase()
+    ?.trim();
   const user = context?.user;
-  const isHolder = !!wallet; // v0: any connected wallet is treated as holder
+  const isHolder = !!wallet; // v0: any connected Farcaster wallet is treated as holder
 
   const selectedProject = selectedProjectId
     ? projects.find((p) => p.id === selectedProjectId) ?? null
@@ -132,7 +111,7 @@ export default function Page() {
       if (!res.ok) throw new Error("Failed to fetch projects");
       const data = await res.json();
       const list: ProjectSummary[] = data.projects ?? [];
-      setProjects(list);
+      setProjects(Array.isArray(list) ? list : []);
       if (!selectedProjectId && list.length > 0) {
         setSelectedProjectId(list[0].id);
       }
@@ -154,7 +133,8 @@ export default function Page() {
       );
       if (!res.ok) throw new Error("Failed to fetch questions");
       const data = await res.json();
-      setQuestions(data.questions ?? []);
+      const list: Question[] = data.questions ?? [];
+      setQuestions(Array.isArray(list) ? list : []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -162,11 +142,14 @@ export default function Page() {
     }
   };
 
+  // initial projects
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!mounted) return;
     void refreshProjects();
   }, [mounted]);
 
+  // questions when project changes
   useEffect(() => {
     if (!selectedProjectId) return;
     void refreshQuestions(selectedProjectId);
@@ -178,7 +161,7 @@ export default function Page() {
     e.preventDefault();
     if (!wallet || !user) {
       alert(
-        "Connect a wallet in Farcaster to enable Beacon for a token."
+        "Open Beacon from Farcaster with a connected wallet to enable a token."
       );
       return;
     }
@@ -252,7 +235,10 @@ export default function Page() {
       const res = await fetch("/api/questions/upvote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ questionId: id, walletAddress: wallet }),
+        body: JSON.stringify({
+          questionId: id,
+          walletAddress: wallet,
+        }),
       });
       if (!res.ok) throw new Error("Failed to upvote");
       await refreshQuestions(selectedProjectId);
@@ -447,7 +433,7 @@ export default function Page() {
 
   const sectionTitleRow: CSSProperties = {
     display: "flex",
-    justifyContent: "spaceBetween" as any,
+    justifyContent: "space-between",
     alignItems: "baseline",
     marginBottom: 6,
     marginTop: 4,
@@ -592,7 +578,9 @@ export default function Page() {
             For tokenholders
           </button>
           <button
-            style={mode === "dev" ? modeTabActive : modeTabBase}
+            style={
+              mode === "dev" ? modeTabActive : modeTabBase
+            }
             onClick={() => setMode("dev")}
           >
             For devs
@@ -644,13 +632,12 @@ export default function Page() {
                       ? `${wallet.slice(0, 4)}…${wallet.slice(
                           -4
                         )}`
-                      : "not connected"}
+                      : "not detected"}
                   </div>
                 </div>
               </div>
 
               <div style={heroStatRow}>
-                {/* Holder status + connect */}
                 <div style={heroStatBlock}>
                   <div style={heroLabel}>Holder status</div>
                   <div style={heroValue}>
@@ -659,42 +646,14 @@ export default function Page() {
                       : "View-only"}
                   </div>
                   <div style={heroSub}>
-                    {isHolder
-                      ? `Wallet ${wallet?.slice(
-                          0,
-                          6
-                        )}…${wallet?.slice(-4)}`
-                      : "Connect your Farcaster wallet to ask and upvote questions."}
+                    Open Beacon from Farcaster with a
+                    connected wallet to ask questions.
                   </div>
-                  {!isHolder && (
-                    <button
-                      onClick={handleConnectWallet}
-                      style={{
-                        marginTop: 8,
-                        padding: "6px 12px",
-                        borderRadius: 999,
-                        border:
-                          "1px solid rgba(129, 140, 248, 0.9)",
-                        background:
-                          connectStatus === "pending"
-                            ? "rgba(88,28,135,0.45)"
-                            : "rgba(37, 99, 235, 0.9)",
-                        color: "#ede9fe",
-                        fontSize: 11,
-                        fontWeight: 500,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {connectStatus === "pending"
-                        ? "Connecting…"
-                        : "Connect wallet"}
-                    </button>
-                  )}
                 </div>
-
-                {/* Available tokens */}
                 <div style={heroStatBlock}>
-                  <div style={heroLabel}>Available tokens</div>
+                  <div style={heroLabel}>
+                    Available tokens
+                  </div>
                   <div style={heroValue}>
                     {projectsLoading
                       ? "Loading…"
@@ -797,7 +756,7 @@ export default function Page() {
                 placeholder={
                   isHolder
                     ? "Ask about roadmap, token design, launches, or anything you want clarity on…"
-                    : "Connect a wallet in Farcaster to ask a question."
+                    : "Open Beacon from Farcaster with a connected wallet to ask a question."
                 }
                 disabled={!isHolder || !selectedProjectId}
                 value={questionText}
@@ -883,8 +842,13 @@ export default function Page() {
                   ? q.voters.includes(wallet)
                   : false;
                 return (
-                  <div key={q.id} style={questionCard}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    key={q.id}
+                    style={questionCard}
+                  >
+                    <div
+                      style={{ flex: 1, minWidth: 0 }}
+                    >
                       <p
                         style={{
                           margin: 0,
@@ -905,9 +869,13 @@ export default function Page() {
                     </div>
                     <button
                       style={
-                        voted ? voteButtonActive : voteButton
+                        voted
+                          ? voteButtonActive
+                          : voteButton
                       }
-                      onClick={() => handleUpvote(q.id)}
+                      onClick={() =>
+                        handleUpvote(q.id)
+                      }
                       disabled={!wallet || voted}
                     >
                       ▲ {q.votes}
@@ -923,37 +891,20 @@ export default function Page() {
             <div style={heroCard}>
               <div style={heroTopRow}>
                 <div>
-                  <div style={heroLabel}>You are deploying as</div>
+                  <div style={heroLabel}>
+                    You are deploying as
+                  </div>
                   <div style={heroValue}>
                     {wallet
                       ? `${wallet.slice(0, 6)}…${wallet.slice(
                           -4
                         )}`
-                      : "No wallet connected"}
+                      : "No wallet detected"}
                   </div>
                   <div style={heroSub}>
                     This wallet will be recorded as the token
                     admin for Beacon.
                   </div>
-                  {!wallet && (
-                    <button
-                      onClick={handleConnectWallet}
-                      style={{
-                        marginTop: 8,
-                        padding: "6px 12px",
-                        borderRadius: 999,
-                        border:
-                          "1px solid rgba(129, 140, 248, 0.9)",
-                        background: "rgba(37, 99, 235, 0.9)",
-                        color: "#ede9fe",
-                        fontSize: 11,
-                        fontWeight: 500,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Connect wallet
-                    </button>
-                  )}
                 </div>
                 <div
                   style={{
@@ -961,8 +912,12 @@ export default function Page() {
                     fontSize: 11,
                   }}
                 >
-                  <div style={heroLabel}>Enabled tokens</div>
-                  <div style={heroValue}>{myProjects.length}</div>
+                  <div style={heroLabel}>
+                    Enabled tokens
+                  </div>
+                  <div style={heroValue}>
+                    {myProjects.length}
+                  </div>
                   <div style={heroSub}>
                     Only you (or your team) should use this
                     wallet when enabling new tokens.
@@ -982,9 +937,9 @@ export default function Page() {
                   color: "#cbc7ff",
                 }}
               >
-                Turn your token into a Q&amp;A funnel. Holders
-                can submit and upvote questions; you always see
-                the highest-signal ones first.
+                Turn your token into a Q&amp;A funnel.
+                Holders can submit and upvote questions;
+                you always see the highest-signal ones first.
               </div>
 
               <div style={{ marginBottom: 8 }}>
