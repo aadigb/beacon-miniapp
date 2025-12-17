@@ -78,8 +78,10 @@ export default function Page() {
     void init();
   }, [context, sdkReady]);
 
-  const wallet = context?.wallets?.[0]?.address?.toLowerCase();
-  const user = context?.user;
+   const ctx = context as any;
+
+  const wallet = ctx?.wallets?.[0]?.address?.toLowerCase();
+  const user = ctx?.user;
   const isHolder = !!wallet; // v0: any connected wallet is treated as holder
 
   // --------- Data fetch helpers ---------
