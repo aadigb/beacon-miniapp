@@ -1,12 +1,11 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
   webpack: (config) => {
-    config.externals.push('pino-pretty', 'lokijs', 'encoding');
+    
+    config.externals.push("pino-pretty", "lokijs", "encoding");
     return config;
-  },
-  experimental: {
-    allowedDevOrigins: ['towery-robbyn-zebrine.ngrok-free.dev'],
   },
 };
 
-module.exports = nextConfig;
+export default nextConfig;
