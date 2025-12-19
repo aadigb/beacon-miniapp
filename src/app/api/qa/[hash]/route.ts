@@ -1,45 +1,31 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { fetchCastRepliesSorted } from "../../../../lib/qa";
 
 export async function GET(
-  req: NextRequest,
-  { params }: { params: { hash: string } }
+  req: Request,
+  context: { params: { hash: string } }
 ) {
-  const hash = params.hash;
+  const { hash } = context.params;
 
-  const res = await fetch(
-    `https://api.neynar.com/v2/farcaster/cast/replies?hash=${hash}&limit=50`,
-    {
-      headers: {
-        accept: "application/json",
-        api_key: process.env.NEYNAR_API_KEY!,
-      },
-    }
-  );
+  if (!hash) {
+    return NextResponse.json(
+      { error: "Missing cast hash" },
+      { status: 400 }
+    );
+  }
 
-  if (!res.ok) {
+  try {
+    const replies = await fetchCastRepliesSorted(hash);
+
+    return NextResponse.json({
+      hash,
+      replies,
+    });
+  } catch (err) {
+    console.error("QA replies fetch failed", err);
     return NextResponse.json(
       { error: "Failed to fetch replies" },
       { status: 500 }
     );
   }
-
-  const data = await res.json();
-
-  const replies = data.casts
-    .map((c: any) => ({
-      hash: c.hash,
-      text: c.text,
-      author: c.author.username,
-      fid: c.author.fid,
-      likes: c.reactions.likes_count,
-      recasts: c.reactions.recasts_count,
-      replies: c.replies.count,
-      score:
-        c.reactions.likes_count * 2 +
-        c.reactions.recasts_count +
-        c.replies.count,
-    }))
-    .sort((a: any, b: any) => b.score - a.score);
-
-  return NextResponse.json({ replies });
 }
