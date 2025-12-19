@@ -5,7 +5,7 @@ export async function GET(
   req: Request,
   context: { params: { hash: string } }
 ) {
-  const { hash } = context.params;
+  const hash = context.params.hash;
 
   if (!hash) {
     return NextResponse.json(
@@ -16,11 +16,7 @@ export async function GET(
 
   try {
     const replies = await fetchCastRepliesSorted(hash);
-
-    return NextResponse.json({
-      hash,
-      replies,
-    });
+    return NextResponse.json({ hash, replies });
   } catch (err) {
     console.error("QA replies fetch failed", err);
     return NextResponse.json(
