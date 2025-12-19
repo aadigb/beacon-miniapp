@@ -1,5 +1,6 @@
 // src/app/api/projects/route.ts
 import { isContractOwner } from "../../../server/onchain/isContractAdmin";
+import { isTrustedUser } from "../../../server/farcaster/isTrustedUser";
 import { NextRequest, NextResponse } from "next/server";
 import {
   listProjectsWithCounts,
@@ -34,14 +35,15 @@ export async function POST(req: NextRequest) {
 
  const wallet = adminWallet.toLowerCase();
 
-const isAdmin = await isContractOwner(tokenAddress, wallet);
+const isTrusted = await isTrustedUser(adminFid);
 
-if (!isAdmin) {
+if (!isTrusted) {
   return NextResponse.json(
-    { error: "Wallet is not admin/owner of this contract" },
+    { error: "User does not meet trust requirements" },
     { status: 403 }
   );
 }
+
 
 const project = await createProject({
   tokenSymbol,
