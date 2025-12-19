@@ -1,4 +1,5 @@
 // src/app/api/projects/route.ts
+import { isContractOwner } from "../../../server/onchain/isContractAdmin";
 import { NextRequest, NextResponse } from "next/server";
 import {
   listProjectsWithCounts,
@@ -6,9 +7,10 @@ import {
 } from "../../../server/db";
 
 export async function GET() {
-  const projects = listProjectsWithCounts();
+  const projects = await listProjectsWithCounts();
   return NextResponse.json({ projects });
 }
+
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,14 +32,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const project = createProject({
-      tokenSymbol: (tokenSymbol || "$TOKEN").trim(),
-      tokenAddress: tokenAddress.trim(),
-      chain: (chain || "base-mainnet").trim(),
-      adminWallet: adminWallet.toLowerCase(),
-      adminFid,
-      adminUsername: adminUsername || "",
-    });
+ const wallet = adminWallet.toLowerCase();
+
+const isAdmin = await isContractOwner(tokenAddress, wallet);
+
+if (!isAdmin) {
+  return NextResponse.json(
+    { error: "Wallet is not admin/owner of this contract" },
+    { status: 403 }
+  );
+}
+
+const project = await createProject({
+  tokenSymbol,
+  tokenAddress,
+  chain,
+  adminWallet: wallet,
+  adminFid,
+  adminUsername,
+});
+
 
     return NextResponse.json({ project }, { status: 201 });
   } catch (e) {
