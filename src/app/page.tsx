@@ -55,6 +55,7 @@ export default function Page() {
 
   const [mounted, setMounted] = useState(false);
   const [sdkReady, setSdkReady] = useState(false);
+
   const [mode, setMode] = useState<"holder" | "dev">("holder");
 
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -82,10 +83,17 @@ export default function Page() {
 
   useEffect(() => {
     if (!isSDKLoaded || sdkReady || !context) return;
-    sdk.actions.ready().then(() => setSdkReady(true)).catch(console.error);
+    (async () => {
+      try {
+        await sdk.actions.ready();
+        setSdkReady(true);
+      } catch (e) {
+        console.error("sdk.actions.ready failed", e);
+      }
+    })();
   }, [context, isSDKLoaded, sdkReady]);
 
-  /* ---------------- Wallet (Wagmi + Farcaster) ---------------- */
+  /* ---------------- Wallet (Wagmi Mini App) ---------------- */
 
   const { address } = useAccount();
   const { connect, connectors, status: connectStatus } = useConnect();
@@ -95,16 +103,20 @@ export default function Page() {
 
   const handleConnectWallet = () => {
     const connector = connectors?.[0];
-    if (!connector) return;
+    if (!connector) {
+      console.warn("Miniapp connector not ready");
+      return;
+    }
     connect({ connector });
   };
 
-  /* ---------------- Derived State ---------------- */
+  /* ---------------- Derived ---------------- */
 
-  const selectedProject = useMemo(
-    () => projects.find((p) => p.id === selectedProjectId) ?? null,
-    [projects, selectedProjectId]
-  );
+  const selectedProject = useMemo(() => {
+    return selectedProjectId
+      ? projects.find((p) => p.id === selectedProjectId) ?? null
+      : null;
+  }, [projects, selectedProjectId]);
 
   const isAdmin = useMemo(() => {
     if (!wallet || !selectedProject) return false;
@@ -113,17 +125,20 @@ export default function Page() {
 
   const canPost = !!wallet && (isOnchainHolder || isAdmin);
 
-  /* ---------------- Data Fetching ---------------- */
+  /* ---------------- Data ---------------- */
 
   const refreshProjects = useCallback(async () => {
     setProjectsLoading(true);
     try {
       const res = await fetch("/api/projects", { cache: "no-store" });
       const data = await res.json();
-      setProjects(data.projects ?? []);
-      setSelectedProjectId((cur) => cur ?? data.projects?.[0]?.id ?? null);
-    } catch (e) {
-      console.error(e);
+      const list: ProjectSummary[] = Array.isArray(data.projects)
+        ? data.projects
+        : [];
+      setProjects(list);
+      setSelectedProjectId((cur) => cur ?? list[0]?.id ?? null);
+    } catch (err) {
+      console.error(err);
     } finally {
       setProjectsLoading(false);
     }
@@ -132,13 +147,14 @@ export default function Page() {
   const refreshQuestions = useCallback(async (projectId: string) => {
     setQuestionsLoading(true);
     try {
-      const res = await fetch(`/api/questions?projectId=${projectId}`, {
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/questions?projectId=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" }
+      );
       const data = await res.json();
-      setQuestions(data.questions ?? []);
-    } catch (e) {
-      console.error(e);
+      setQuestions(Array.isArray(data.questions) ? data.questions : []);
+    } catch (err) {
+      console.error(err);
     } finally {
       setQuestionsLoading(false);
     }
@@ -163,11 +179,13 @@ export default function Page() {
       setHolderLoading(true);
       try {
         const res = await fetch(
-          `/api/holder?tokenAddress=${selectedProject.tokenAddress}&walletAddress=${wallet}`,
+          `/api/holder?tokenAddress=${encodeURIComponent(
+            selectedProject.tokenAddress
+          )}&walletAddress=${encodeURIComponent(wallet)}`,
           { cache: "no-store" }
         );
         const data = await res.json();
-        setIsOnchainHolder(!!data.isHolder);
+        if (res.ok) setIsOnchainHolder(!!data.isHolder);
       } catch (e) {
         console.error(e);
       } finally {
@@ -182,7 +200,10 @@ export default function Page() {
 
   const handleEnableForToken = async (e: FormEvent) => {
     e.preventDefault();
-    if (!wallet || !user || !devTokenAddress.trim()) return;
+    if (!wallet || !user || !devTokenAddress.trim()) {
+      alert("Wallet not connected or token missing.");
+      return;
+    }
 
     setDevSaving(true);
     try {
@@ -190,7 +211,7 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tokenSymbol: devTokenSymbol.trim(),
+          tokenSymbol: devTokenSymbol.trim() || "$TOKEN",
           tokenAddress: devTokenAddress.trim(),
           chain: devChain,
           adminWallet: wallet,
@@ -200,51 +221,110 @@ export default function Page() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        console.error("Enable token failed", data);
+        alert(data.error || "Failed to enable token");
+        return;
+      }
 
       await refreshProjects();
+      if (data?.project?.id) setSelectedProjectId(data.project.id);
       setMode("holder");
       setDevTokenAddress("");
-    } catch (e: any) {
-      alert(e.message ?? "Failed to enable token");
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Failed to enable token");
     } finally {
       setDevSaving(false);
     }
   };
 
   const handleSubmitQuestion = async () => {
-    if (!canPost || !questionText.trim() || !selectedProjectId) return;
+    if (!canPost || !wallet || !user || !selectedProjectId) return;
+    const text = questionText.trim();
+    if (!text) return;
 
-    await fetch("/api/questions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: selectedProjectId,
-        text: questionText,
-        authorFid: user.fid,
-        authorUsername: user.username,
-        walletAddress: wallet,
-      }),
-    });
-
-    setQuestionText("");
-    refreshQuestions(selectedProjectId);
+    try {
+      const res = await fetch("/api/questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: selectedProjectId,
+          text,
+          authorFid: user.fid,
+          authorUsername: user.username,
+          walletAddress: wallet,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to submit question");
+      setQuestionText("");
+      await refreshQuestions(selectedProjectId);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleUpvote = async (id: string) => {
-    if (!canPost) return;
-    await fetch("/api/questions/upvote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ questionId: id, walletAddress: wallet }),
-    });
-    refreshQuestions(selectedProjectId!);
+    if (!canPost || !wallet) return;
+    try {
+      const res = await fetch("/api/questions/upvote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ questionId: id, walletAddress: wallet }),
+      });
+      if (!res.ok) throw new Error("Failed to upvote");
+      if (selectedProjectId) await refreshQuestions(selectedProjectId);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  /* ---------------- Styles (UNCHANGED) ---------------- */
+
+  const outerStyle: CSSProperties = {
+    minHeight: "100vh",
+    background:
+      "radial-gradient(circle at top, #120926 0, #05040b 45%, #030208 100%)",
+    color: "#f8f7ff",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "flex-start",
+    padding: 16,
+    boxSizing: "border-box",
+    fontFamily:
+      'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif',
+  };
+
+  const shellStyle: CSSProperties = {
+    width: "100%",
+    maxWidth: 480,
+    borderRadius: 28,
+    border: "1px solid rgba(135,118,217,0.24)",
+    background:
+      "linear-gradient(145deg, rgba(11,9,27,0.98) 0%, rgba(3,3,12,0.98) 100%)",
+    boxShadow: "0 26px 70px rgba(0,0,0,0.85)",
+    padding: 16,
+    boxSizing: "border-box",
+  };
+
+  const card: CSSProperties = {
+    borderRadius: 18,
+    padding: 12,
+    border: "1px solid rgba(63,57,114,0.9)",
+    background: "rgba(7,6,20,0.98)",
+    marginBottom: 12,
   };
 
   /* ---------------- Loading ---------------- */
 
   if (!mounted || isLoading || !context || !sdkReady) {
-    return <div style={{ padding: 20 }}>Booting Beacon…</div>;
+    return (
+      <div style={outerStyle}>
+        <div style={shellStyle}>
+          <div style={card}>Booting Beacon…</div>
+        </div>
+      </div>
+    );
   }
 
   /* ============================== */
@@ -252,39 +332,52 @@ export default function Page() {
   /* ============================== */
 
   return (
-    <div style={{ minHeight: "100vh", padding: 16, background: "#05040b" }}>
-      <div style={{ maxWidth: 480, margin: "0 auto", color: "#fff" }}>
+    <div style={outerStyle}>
+      <div style={shellStyle}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 11, letterSpacing: "0.2em" }}>BEACON</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>Token Q&amp;A</div>
+            <div style={{ fontSize: 11, letterSpacing: "0.22em", color: "#a2a0c7" }}>
+              BEACON
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 650 }}>Token Q&amp;A</div>
           </div>
 
           <div>
-            <div>@{user.username}</div>
+            <div>@{user?.username ?? "anon"}</div>
             {!wallet ? (
               <button onClick={handleConnectWallet}>
                 {connectStatus === "pending" ? "Connecting…" : "Connect wallet"}
               </button>
             ) : (
-              <div>{wallet.slice(0, 6)}…{wallet.slice(-4)}</div>
+              <div>
+                {wallet.slice(0, 6)}…{wallet.slice(-4)}
+              </div>
             )}
           </div>
         </div>
 
-        {/* Mode Tabs */}
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button onClick={() => setMode("holder")}>For holders</button>
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={() => setMode("holder")}>For tokenholders</button>
           <button onClick={() => setMode("dev")}>For devs</button>
         </div>
 
         {/* Content */}
         {mode === "dev" ? (
-          <form onSubmit={handleEnableForToken}>
-            <input value={devTokenSymbol} onChange={(e) => setDevTokenSymbol(e.target.value)} />
-            <input value={devTokenAddress} onChange={(e) => setDevTokenAddress(e.target.value)} />
-            <button disabled={devSaving}>{devSaving ? "Enabling…" : "Enable Q&A"}</button>
+          <form onSubmit={handleEnableForToken} style={card}>
+            <input
+              value={devTokenSymbol}
+              onChange={(e) => setDevTokenSymbol(e.target.value)}
+            />
+            <input
+              value={devTokenAddress}
+              onChange={(e) => setDevTokenAddress(e.target.value)}
+              placeholder="0x…"
+            />
+            <button disabled={devSaving}>
+              {devSaving ? "Enabling…" : "Enable Q&A"}
+            </button>
           </form>
         ) : (
           <>
@@ -298,9 +391,12 @@ export default function Page() {
             </button>
 
             {questions.map((q) => (
-              <div key={q.id}>
+              <div key={q.id} style={card}>
                 <div>{q.text}</div>
-                <button onClick={() => handleUpvote(q.id)}>
+                <button
+                  disabled={!canPost || q.voters.includes(wallet ?? "")}
+                  onClick={() => handleUpvote(q.id)}
+                >
                   ▲ {q.votes}
                 </button>
               </div>
@@ -309,5 +405,5 @@ export default function Page() {
         )}
       </div>
     </div>
-  );
+  );  
 }
